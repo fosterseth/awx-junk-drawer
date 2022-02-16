@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 import requests
 import json
 import itertools
+import os
 
 
 """
@@ -26,7 +27,8 @@ urls = {
 'https://api.github.com/repos/ansible/ansible-runner/tags': dict(color="green",  label="runner"),
 }
 # github > settings > developer settings > personal access token
-github_personal_access_token = 'yourpersonalaccesstoken'
+# export TAGPLOTPAT=personalaccesstoken
+github_personal_access_token = os.environ['TAGPLOTPAT']
 
 # only show data from the last N years
 cutoff_years = 1
