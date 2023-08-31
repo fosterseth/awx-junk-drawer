@@ -1,0 +1,72 @@
+# This is a local development utility for K8S based deployments.
+# Intended to use with a kind cluster, but could be modified to work with k3s, k3d, minikube, etc.
+# This playbook will start up a local docker container that can be used as an execution or hop node.
+
+# How to use
+# 1. Deploy AWX via a Kind cluster
+# 2. Add an execution or hop node instance via the API and download the install bundle
+# 3. Run this playbook against install bundle
+
+# ansible-playbook -e "install_tar=/home/sbf/Downloads/ex2_install_bundle.tar.gz" docker_execution_node.yml
+
+# 4. Run docker ps -a to see the container
+
+# Requirements
+# ansible-galaxy collection install community.docker
+
+---
+- hosts: localhost
+  connection: local
+  vars:
+    install_basename: "{{ install_tar | basename | splitext | first | splitext | first }}"
+    install_dir: "{{ install_tar | dirname }}"
+
+  tasks:
+    - name: untar download bundle
+      ansible.builtin.unarchive:
+        src: "{{ install_tar }}"
+        dest: "{{ install_dir }}"
+    
+    - name: load group_vars/all.yml
+      ansible.builtin.include_vars: "{{ install_dir }}/{{ install_basename }}/group_vars/all.yml"
+    
+    - name: get instance name from inventory.yml
+      ansible.builtin.include_vars:
+        file: "{{ install_dir }}/{{ install_basename }}/inventory.yml"
+        name: inventory_vars
+    
+    - name: set receptor node id
+      set_fact:
+        # these override group_vars/all.yml
+        receptor_host_identifier: "{{ inventory_vars['all']['hosts']['remote-execution']['ansible_host'] }}"
+        receptor_config_path: "{{ install_dir }}/{{ install_basename }}/receptor"
+        receptor_user: "{{ lookup('env','USER') }}"
+        receptor_group: "{{ lookup('env','USER') }}"
+        receptor_log_level: 'debug'
+        receptor_socket_dir: /etc/receptor
+        receptor_worksign_public_keyfile: /etc/receptor/work-public-key.pem
+        receptor_tls_certfile: /etc/receptor/tls/receptor.crt
+        receptor_tls_keyfile: /etc/receptor/tls/receptor.key
+        receptor_ca_certfile: /etc/receptor/tls/ca/receptor-ca.crt
+
+    - import_role:
+        name: ansible.receptor.setup
+        tasks_from: generate_config
+    
+    - name: deploy container
+      docker_container:
+        # image: ghcr.io/ansible/awx_devel:devel
+        image: quay.io/fosterseth/awx-ee:hop_nodes
+        name: "{{ receptor_host_identifier }}"
+        privileged: true
+        state: started
+        user: 1000 # awx
+        auto_remove: false
+        recreate: true
+        networks:
+          - name: kind # change this to connect to different local docker network
+        mounts:
+          - source: "{{ receptor_config_path }}"
+            target: /etc/receptor
+            type: bind
+        command: receptor -c /etc/receptor/receptor.conf

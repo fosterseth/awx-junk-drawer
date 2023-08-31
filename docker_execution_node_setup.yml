@@ -1,0 +1,39 @@
+- name: wait for connection
+  ansible.builtin.wait_for_connection:
+    timeout: 10
+
+- name: gather facts
+  ansible.builtin.gather_facts: # gather facts here
+
+- name: load group_vars/all.yml
+  delegate_to: localhost
+  ansible.builtin.include_vars: "{{ install_dir }}/{{ install_basename }}/group_vars/all.yml"
+
+- name: Create the receptor user
+  user:
+    name: "{{ receptor_user }}"
+    shell: /bin/bash
+
+- import_role:
+    name: ansible.receptor.podman
+
+- name: override receptor dependencies
+  set_fact:
+    # these override group_vars/all.yml
+    # receptor_dependencies:
+    #   - python3-pip
+    receptor_log_level: info
+    # receptor_replace_tls: true
+    custom_worksign_public_keyfile: "{{ install_dir }}/{{ install_basename }}/receptor/work_public_key.pem"
+    custom_tls_certfile: "{{ install_dir }}/{{ install_basename }}/receptor/tls/receptor.crt"
+    custom_tls_keyfile: "{{ install_dir }}/{{ install_basename }}/receptor/tls/receptor.key"
+    custom_ca_certfile: "{{ install_dir }}/{{ install_basename }}/receptor/tls/ca/mesh-CA.crt"
+    receptor_install_method: release
+    receptor_local_bin_file: /home/sbf/receptor/receptor
+
+- import_role:
+    name: ansible.receptor.setup
+
+# - name: Install ansible-runner
+#   pip:
+#     name: ansible-runner

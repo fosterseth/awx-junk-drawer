@@ -1,0 +1,110 @@
+# This is a local development utility for K8S based deployments.
+# Intended to use with a kind cluster, but could be modified to work with k3s, k3d, minikube, etc.
+# This playbook will start up a local docker container that can be used as an execution or hop node.
+
+# How to use
+# 1. Deploy AWX via a Kind cluster
+# 2. Add an execution or hop node instance via the API and download the install bundle
+# 3. Run this playbook against install bundle
+
+# ansible-playbook -e "install_tar=/home/sbf/Downloads/ex2_install_bundle.tar.gz" docker_execution_node_systemd.yml
+
+# 4. Run docker ps -a to see the container
+
+# Requirements
+# ansible-galaxy collection install community.docker
+
+# ==================================== DOCKERFILE ====================================================
+# FROM fedora:37
+
+# RUN dnf -y update && \
+#     dnf -y install \
+#     openssh-server \
+#     dnf-plugins-core \
+#     openssl \
+#     && \
+#     mkdir /var/run/sshd && \
+#     echo 'root:password' | chpasswd
+# RUN dnf install 'dnf-command(copr)'
+# RUN ssh-keygen -A && \
+#     sed -i 's/^#PermitRootLogin.*/PermitRootLogin yes/' /etc/ssh/sshd_config && \
+#     sed -i 's/^#PasswordAuthentication.*/PasswordAuthentication yes/' /etc/ssh/sshd_config && \
+#     sed -i 's/^#PubkeyAuthentication.*/PubkeyAuthentication yes/' /etc/ssh/sshd_config
+
+# USER root
+# RUN useradd -m -s /bin/bash -p $(echo awx | openssl passwd -1 -stdin) awx
+# RUN echo "awx ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+# RUN mkdir -p /var/empty/sshd
+# EXPOSE 22
+
+# RUN systemctl disable systemd-resolved
+
+# CMD ["/sbin/init"]
+
+---
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    controller_url: http://localhost:30080
+    username: sbf
+    password: sbf
+    nodename: hop1
+    download_dir: /home/sbf/Downloads
+    # install_basename: "{{ install_tar | basename | splitext | first | splitext | first }}"
+    # install_dir: "{{ install_tar | dirname }}"
+    run_setup: true
+
+  tasks:
+    - name: get tar
+      ansible.builtin.get_url:
+        url: "{{ controller_url }}/api/v2/instances/{{ nodename }}/install_bundle/"
+        username: "{{ username }}"
+        password: "{{ password }}"
+        dest: "{{ download_dir }}/{{ nodename }}.tar.gz"
+        force_basic_auth: true
+        validate_certs: false
+        force: true
+
+    - name: untar download bundle
+      ansible.builtin.unarchive:
+        src: "{{ download_dir }}/{{ nodename }}.tar.gz"
+        dest: "{{ download_dir }}"
+
+    - name: load group_vars/all.yml
+      ansible.builtin.include_vars: "{{ download_dir }}/{{ nodename }}_install_bundle/group_vars/all.yml"
+
+    - name: deploy container
+      docker_container:
+        image: quay.io/fosterseth/public:execution_node_systemd
+        name: "{{ nodename }}"
+        privileged: true
+        state: started
+        user: root # awx
+        auto_remove: true
+        recreate: false
+        networks:
+          - name: kind # change this to connect to different local docker network
+      register: dockerreturn
+
+    # - name: show docker container info
+    #   ansible.builtin.debug:
+    #     var: dockerreturn.container.NetworkSettings.Networks.kind.IPAddress
+
+    - name: add host for docker container
+      ansible.builtin.add_host:
+        # name: "{{ dockerreturn.container.NetworkSettings.Networks.kind.IPAddress}}"
+        name: "{{ nodename }}"
+        nodename: "{{ nodename }}"
+        group: dockercontainer
+        run_setup: "{{ run_setup }}"
+        ansible_connection: community.docker.docker
+        download_dir: "{{ download_dir }}"
+
+- hosts: dockercontainer
+  become: yes
+  gather_facts: false # leave as false to wait for connection
+
+- name: run installer
+  ansible.builtin.import_playbook: "{{ download_dir }}/{{ nodename }}_install_bundle/install_receptor.yml"
+  when: run_setup | bool
